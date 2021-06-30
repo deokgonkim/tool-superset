@@ -1,0 +1,870 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Superset TEST
+Parameters:
+  # Service definition
+  ServiceName:
+    Type: String
+    # update with the name of the service
+    Default: superset-test
+  ContainerPort:
+    Type: Number
+    Default: 8088
+  LoadBalancerPort:
+    Type: Number
+    Default: 443
+  HealthCheckPath:
+    Type: String
+    Default: /health
+  Subdomain:
+    Type: String
+    Default: superset-test
+  
+  # Environment variables
+  AppName:
+    Type: String
+    Default: superset-test
+  
+  DatabaseDb:
+    Type: String
+    Default: superset
+  DatabaseHost:
+    Type: String
+    # for fargate
+    Default: localhost
+  DatabasePassword:
+    Type: String
+    Default: superset
+  DatabaseUser:
+    Type: String
+    Default: superset
+  DatabasePort:
+    Type: String
+    Default: 5432
+  DatabaseDialect:
+    Type: String
+    Default: postgresql
+  PostgresDb:
+    Type: String
+    Default: superset
+  PostgresUser:
+    Type: String
+    Default: superset
+  PostgresPassword:
+    Type: String
+    Default: superset
+  Pythonpath:
+    Type: String
+    Default: "/app/pythonpath:/app/docker/pythonpath_dev"
+  RedisHost:
+    Type: String
+    # for fargate
+    Default: localhost
+  RedisPort:
+    Type: String
+    Default: 6379
+  FlaskEnv:
+    Type: String
+    Default: production
+  SupersetEnv:
+    Type: String
+    Default: production
+  SupersetLoadExamples:
+    Type: String
+    Default: yes
+  CypressConfig:
+    Type: String
+    Default: false
+  SupersetPort:
+    Type: String
+    Default: 8088
+  
+  AuthLdapServer:
+    Type: String
+  AuthLdapUsernameFormat:
+    Type: String
+  AuthLdapSearch:
+    Type: String
+
+Resources:
+  RedisFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      PerformanceMode: generalPurpose
+      Encrypted: true
+      FileSystemTags:
+      - Key: Name
+        Value:
+          !Join
+            - ''
+            - - !Ref ServiceName
+              - -redis
+              - -volume
+  RedisEFSMountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref RedisFileSystem
+      SubnetId: !ImportValue PublicSubnetA
+      SecurityGroups:
+        - !ImportValue SecurityGroupVPC # - vpc
+  RedisEFSMountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref RedisFileSystem
+      SubnetId: !ImportValue PublicSubnetB
+      SecurityGroups:
+        - !ImportValue SecurityGroupVPC # - vpc
+  RedisEFSMountTargetC:
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref RedisFileSystem
+      SubnetId: !ImportValue PublicSubnetC
+      SecurityGroups:
+        - !ImportValue SecurityGroupVPC # - vpc
+
+  PostgresFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      PerformanceMode: generalPurpose
+      Encrypted: true
+      FileSystemTags:
+      - Key: Name
+        Value:
+          !Join
+            - ''
+            - - !Ref ServiceName
+              - -postgres
+              - -volume
+  PostgresEFSMountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref PostgresFileSystem
+      SubnetId: !ImportValue PublicSubnetA
+      SecurityGroups:
+        - !ImportValue SecurityGroupVPC # - vpc
+  PostgresEFSMountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref PostgresFileSystem
+      SubnetId: !ImportValue PublicSubnetB
+      SecurityGroups:
+        - !ImportValue SecurityGroupVPC # - vpc
+  PostgresEFSMountTargetC:
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref PostgresFileSystem
+      SubnetId: !ImportValue PublicSubnetC
+      SecurityGroups:
+        - !ImportValue SecurityGroupVPC # - vpc
+
+  SupersetFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      PerformanceMode: generalPurpose
+      Encrypted: true
+      FileSystemTags:
+      - Key: Name
+        Value:
+          !Join
+            - ''
+            - - !Ref ServiceName
+              - -superset
+              - -volume
+  SupersetEFSMountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref SupersetFileSystem
+      SubnetId: !ImportValue PublicSubnetA
+      SecurityGroups:
+        - !ImportValue SecurityGroupVPC # - vpc
+  SupersetEFSMountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref SupersetFileSystem
+      SubnetId: !ImportValue PublicSubnetB
+      SecurityGroups:
+        - !ImportValue SecurityGroupVPC # - vpc
+  SupersetEFSMountTargetC:
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref SupersetFileSystem
+      SubnetId: !ImportValue PublicSubnetC
+      SecurityGroups:
+        - !ImportValue SecurityGroupVPC # - vpc
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Join ['', [!Ref ServiceName, -cluster]]
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    # Makes sure the log group is created before it is used.
+    DependsOn: LogGroup
+    Properties:
+      # Name of the task definition. Subsequent versions of the task definition are grouped together under this name.
+      Family: !Join ['', [!Ref ServiceName, -TaskDefinition]]
+      # awsvpc is required for Fargate
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      # 256 (.25 vCPU) - Available memory values: 0.5GB, 1GB, 2GB
+      # 512 (.5 vCPU) - Available memory values: 1GB, 2GB, 3GB, 4GB
+      # 1024 (1 vCPU) - Available memory values: 2GB, 3GB, 4GB, 5GB, 6GB, 7GB, 8GB
+      # 2048 (2 vCPU) - Available memory values: Between 4GB and 16GB in 1GB increments
+      # 4096 (4 vCPU) - Available memory values: Between 8GB and 30GB in 1GB increments
+      Cpu: 2048
+      # 0.5GB, 1GB, 2GB - Available cpu values: 256 (.25 vCPU)
+      # 1GB, 2GB, 3GB, 4GB - Available cpu values: 512 (.5 vCPU)
+      # 2GB, 3GB, 4GB, 5GB, 6GB, 7GB, 8GB - Available cpu values: 1024 (1 vCPU)
+      # Between 4GB and 16GB in 1GB increments - Available cpu values: 2048 (2 vCPU)
+      # Between 8GB and 30GB in 1GB increments - Available cpu values: 4096 (4 vCPU)
+      Memory: 4GB
+      # A role needed by ECS.
+      # "The ARN of the task execution role that containers in this task can assume. All containers in this task are granted the permissions that are specified in this role."
+      # "There is an optional task execution IAM role that you can specify with Fargate to allow your Fargate tasks to make API calls to Amazon ECR."
+      ExecutionRoleArn: !Ref ExecutionRole
+      # "The Amazon Resource Name (ARN) of an AWS Identity and Access Management (IAM) role that grants containers in the task permission to call AWS APIs on your behalf."
+      TaskRoleArn: !Ref TaskRole
+      ContainerDefinitions:
+        - Name: superset_cache
+          Image: redis:latest
+          PortMappings:
+            - ContainerPort: 6379
+          MountPoints:
+            - ContainerPath: /data
+              SourceVolume: redisVolume
+          # Send logs to CloudWatch Logs
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+
+        - Name: superset_db
+          Image: postgres:10
+          PortMappings:
+            - ContainerPort: 5432
+          HealthCheck:
+            Command:
+              - 'CMD-SHELL'
+              - 'pg_isready -U superset'
+            Interval: 5
+            Timeout: 2
+            Retries: 3
+            StartPeriod: 60
+          MountPoints:
+            - ContainerPath: /var/lib/postgresql/data
+              SourceVolume: postgresVolume
+          Environment:
+            - Name: DATABASE_DB
+              Value: !Ref DatabaseDb
+            - Name: DATABASE_HOST
+              Value: !Ref DatabaseHost
+            - Name: DATABASE_PASSWORD
+              Value: !Ref DatabasePassword
+            - Name: DATABASE_USER
+              Value: !Ref DatabaseUser
+            - Name: DATABASE_PORT
+              Value: !Ref DatabasePort
+            - Name: DATABASE_DIALECT
+              Value: !Ref DatabaseDialect
+            - Name: POSTGRES_DB
+              Value: !Ref PostgresDb
+            - Name: POSTGRES_USER
+              Value: !Ref PostgresUser
+            - Name: POSTGRES_PASSWORD
+              Value: !Ref PostgresPassword
+          # Send logs to CloudWatch Logs
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+
+        - Name: superset_app
+          Image: !Join ['', [!Ref "AWS::AccountId", .dkr.ecr.ap-northeast-2.amazonaws.com/tool/superset:latest]]
+          DependsOn:
+            - ContainerName: superset_db
+              Condition: HEALTHY
+            # - ContainerName: superset_cache
+            #   Condition: HEALTHY
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort # 8088
+          MountPoints:
+            # - ContainerPath: /app/docker
+            #   SourceVolume: supersetAppVolume
+            - ContainerPath: /app/superset_home
+              SourceVolume: supersetHomeVolume
+          Environment:
+            - Name: DATABASE_DB
+              Value: !Ref DatabaseDb
+            - Name: DATABASE_HOST
+              Value: !Ref DatabaseHost
+            - Name: DATABASE_PASSWORD
+              Value: !Ref DatabasePassword
+            - Name: DATABASE_USER
+              Value: !Ref DatabaseUser
+            - Name: DATABASE_PORT
+              Value: !Ref DatabasePort
+            - Name: DATABASE_DIALECT
+              Value: !Ref DatabaseDialect
+            - Name: POSTGRES_DB
+              Value: !Ref PostgresDb
+            - Name: POSTGRES_USER
+              Value: !Ref PostgresUser
+            - Name: POSTGRES_PASSWORD
+              Value: !Ref PostgresPassword
+            - Name: PYTHONPATH
+              Value: !Ref Pythonpath
+            - Name: REDIS_HOST
+              Value: !Ref RedisHost
+            - Name: REDIS_PORT
+              Value: !Ref RedisPort
+            - Name: FLASK_ENV
+              Value: !Ref FlaskEnv
+            - Name: SUPERSET_ENV
+              Value: !Ref SupersetEnv
+            - Name: SUPERSET_LOAD_EXAMPLES
+              Value: !Ref SupersetLoadExamples
+            - Name: CYPRESS_CONFIG
+              Value: !Ref CypressConfig
+            - Name: SUPERSET_PORT
+              Value: !Ref SupersetPort
+            - Name: AUTH_LDAP_SERVER
+              Value: !Ref AuthLdapServer
+            - Name: AUTH_LDAP_USERNAME_FORMAT
+              Value: !Ref AuthLdapUsernameFormat
+            - Name: AUTH_LDAP_SEARCH
+              Value: !Ref AuthLdapSearch
+          Command:
+            - "/app/docker/docker-bootstrap.sh"
+            - "app-gunicorn"
+          # Send logs to CloudWatch Logs
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+
+        - Name: superset_app_public
+          Image: !Join ['', [!Ref "AWS::AccountId", .dkr.ecr.ap-northeast-2.amazonaws.com/tool/superset:latest]]
+          DependsOn:
+            - ContainerName: superset_db
+              Condition: HEALTHY
+            # - ContainerName: superset_cache
+            #   Condition: HEALTHY
+          PortMappings:
+            - ContainerPort: 18088 # 8088
+          MountPoints:
+            # - ContainerPath: /app/docker
+            #   SourceVolume: supersetAppVolume
+            - ContainerPath: /app/superset_home
+              SourceVolume: supersetHomeVolume
+          Environment:
+            - Name: DATABASE_DB
+              Value: !Ref DatabaseDb
+            - Name: DATABASE_HOST
+              Value: !Ref DatabaseHost
+            - Name: DATABASE_PASSWORD
+              Value: !Ref DatabasePassword
+            - Name: DATABASE_USER
+              Value: !Ref DatabaseUser
+            - Name: DATABASE_PORT
+              Value: !Ref DatabasePort
+            - Name: DATABASE_DIALECT
+              Value: !Ref DatabaseDialect
+            - Name: POSTGRES_DB
+              Value: !Ref PostgresDb
+            - Name: POSTGRES_USER
+              Value: !Ref PostgresUser
+            - Name: POSTGRES_PASSWORD
+              Value: !Ref PostgresPassword
+            - Name: PYTHONPATH
+              Value: !Ref Pythonpath
+            - Name: REDIS_HOST
+              Value: !Ref RedisHost
+            - Name: REDIS_PORT
+              Value: !Ref RedisPort
+            - Name: FLASK_ENV
+              Value: !Ref FlaskEnv
+            - Name: SUPERSET_ENV
+              Value: !Ref SupersetEnv
+            - Name: SUPERSET_LOAD_EXAMPLES
+              Value: !Ref SupersetLoadExamples
+            - Name: CYPRESS_CONFIG
+              Value: !Ref CypressConfig
+            - Name: SUPERSET_PORT
+              Value: 18088
+            - Name: IS_PUBLIC
+              Value: true
+            - Name: AUTH_LDAP_SERVER
+              Value: !Ref AuthLdapServer
+            - Name: AUTH_LDAP_USERNAME_FORMAT
+              Value: !Ref AuthLdapUsernameFormat
+            - Name: AUTH_LDAP_SEARCH
+              Value: !Ref AuthLdapSearch
+          Command:
+            - "/app/docker/docker-bootstrap.sh"
+            - "app-gunicorn"
+          # Send logs to CloudWatch Logs
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+
+        - Name: superset_init
+          Image: !Join ['', [!Ref "AWS::AccountId", .dkr.ecr.ap-northeast-2.amazonaws.com/tool/superset:latest]]
+          Essential: false
+          DependsOn:
+            - ContainerName: superset_db
+              Condition: HEALTHY
+            # - ContainerName: superset_cache
+            #   Condition: HEALTHY
+          # PortMappings:
+          #   - ContainerPort: !Ref ContainerPort # 8088
+          MountPoints:
+            # - ContainerPath: /app/docker
+            #   SourceVolume: supersetAppVolume
+            - ContainerPath: /app/superset_home
+              SourceVolume: supersetHomeVolume
+          Environment:
+            - Name: DATABASE_DB
+              Value: !Ref DatabaseDb
+            - Name: DATABASE_HOST
+              Value: !Ref DatabaseHost
+            - Name: DATABASE_PASSWORD
+              Value: !Ref DatabasePassword
+            - Name: DATABASE_USER
+              Value: !Ref DatabaseUser
+            - Name: DATABASE_PORT
+              Value: !Ref DatabasePort
+            - Name: DATABASE_DIALECT
+              Value: !Ref DatabaseDialect
+            - Name: POSTGRES_DB
+              Value: !Ref PostgresDb
+            - Name: POSTGRES_USER
+              Value: !Ref PostgresUser
+            - Name: POSTGRES_PASSWORD
+              Value: !Ref PostgresPassword
+            - Name: PYTHONPATH
+              Value: !Ref Pythonpath
+            - Name: REDIS_HOST
+              Value: !Ref RedisHost
+            - Name: REDIS_PORT
+              Value: !Ref RedisPort
+            - Name: FLASK_ENV
+              Value: !Ref FlaskEnv
+            - Name: SUPERSET_ENV
+              Value: !Ref SupersetEnv
+            - Name: SUPERSET_LOAD_EXAMPLES
+              Value: !Ref SupersetLoadExamples
+            - Name: CYPRESS_CONFIG
+              Value: !Ref CypressConfig
+            - Name: SUPERSET_PORT
+              Value: !Ref SupersetPort
+            - Name: AUTH_LDAP_SERVER
+              Value: !Ref AuthLdapServer
+            - Name: AUTH_LDAP_USERNAME_FORMAT
+              Value: !Ref AuthLdapUsernameFormat
+            - Name: AUTH_LDAP_SEARCH
+              Value: !Ref AuthLdapSearch
+          Command:
+            - "/app/docker/docker-init.sh"
+          # Send logs to CloudWatch Logs
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+
+        - Name: superset_worker
+          Image: !Join ['', [!Ref "AWS::AccountId", .dkr.ecr.ap-northeast-2.amazonaws.com/tool/superset:latest]]
+          DependsOn:
+            - ContainerName: superset_db
+              Condition: HEALTHY
+            # - ContainerName: superset_cache
+            #   Condition: HEALTHY
+          # PortMappings:
+          #   - ContainerPort: !Ref ContainerPort # 8088
+          MountPoints:
+            # - ContainerPath: /app/docker
+            #   SourceVolume: supersetAppVolume
+            - ContainerPath: /app/superset_home
+              SourceVolume: supersetHomeVolume
+          Environment:
+            - Name: DATABASE_DB
+              Value: !Ref DatabaseDb
+            - Name: DATABASE_HOST
+              Value: !Ref DatabaseHost
+            - Name: DATABASE_PASSWORD
+              Value: !Ref DatabasePassword
+            - Name: DATABASE_USER
+              Value: !Ref DatabaseUser
+            - Name: DATABASE_PORT
+              Value: !Ref DatabasePort
+            - Name: DATABASE_DIALECT
+              Value: !Ref DatabaseDialect
+            - Name: POSTGRES_DB
+              Value: !Ref PostgresDb
+            - Name: POSTGRES_USER
+              Value: !Ref PostgresUser
+            - Name: POSTGRES_PASSWORD
+              Value: !Ref PostgresPassword
+            - Name: PYTHONPATH
+              Value: !Ref Pythonpath
+            - Name: REDIS_HOST
+              Value: !Ref RedisHost
+            - Name: REDIS_PORT
+              Value: !Ref RedisPort
+            - Name: FLASK_ENV
+              Value: !Ref FlaskEnv
+            - Name: SUPERSET_ENV
+              Value: !Ref SupersetEnv
+            - Name: SUPERSET_LOAD_EXAMPLES
+              Value: !Ref SupersetLoadExamples
+            - Name: CYPRESS_CONFIG
+              Value: !Ref CypressConfig
+            - Name: SUPERSET_PORT
+              Value: !Ref SupersetPort
+            - Name: AUTH_LDAP_SERVER
+              Value: !Ref AuthLdapServer
+            - Name: AUTH_LDAP_USERNAME_FORMAT
+              Value: !Ref AuthLdapUsernameFormat
+            - Name: AUTH_LDAP_SEARCH
+              Value: !Ref AuthLdapSearch
+          Command:
+            - "/app/docker/docker-bootstrap.sh"
+            - "worker"
+          # Send logs to CloudWatch Logs
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+
+        - Name: superset_worker_beat
+          Image: !Join ['', [!Ref "AWS::AccountId", .dkr.ecr.ap-northeast-2.amazonaws.com/tool/superset:latest]]
+          DependsOn:
+            - ContainerName: superset_db
+              Condition: HEALTHY
+            # - ContainerName: superset_cache
+            #   Condition: HEALTHY
+          # PortMappings:
+          #   - ContainerPort: !Ref ContainerPort # 8088
+          MountPoints:
+            # - ContainerPath: /app/docker
+            #   SourceVolume: supersetAppVolume
+            - ContainerPath: /app/superset_home
+              SourceVolume: supersetHomeVolume
+          Environment:
+            - Name: DATABASE_DB
+              Value: !Ref DatabaseDb
+            - Name: DATABASE_HOST
+              Value: !Ref DatabaseHost
+            - Name: DATABASE_PASSWORD
+              Value: !Ref DatabasePassword
+            - Name: DATABASE_USER
+              Value: !Ref DatabaseUser
+            - Name: DATABASE_PORT
+              Value: !Ref DatabasePort
+            - Name: DATABASE_DIALECT
+              Value: !Ref DatabaseDialect
+            - Name: POSTGRES_DB
+              Value: !Ref PostgresDb
+            - Name: POSTGRES_USER
+              Value: !Ref PostgresUser
+            - Name: POSTGRES_PASSWORD
+              Value: !Ref PostgresPassword
+            - Name: PYTHONPATH
+              Value: !Ref Pythonpath
+            - Name: REDIS_HOST
+              Value: !Ref RedisHost
+            - Name: REDIS_PORT
+              Value: !Ref RedisPort
+            - Name: FLASK_ENV
+              Value: !Ref FlaskEnv
+            - Name: SUPERSET_ENV
+              Value: !Ref SupersetEnv
+            - Name: SUPERSET_LOAD_EXAMPLES
+              Value: !Ref SupersetLoadExamples
+            - Name: CYPRESS_CONFIG
+              Value: !Ref CypressConfig
+            - Name: SUPERSET_PORT
+              Value: !Ref SupersetPort
+            - Name: AUTH_LDAP_SERVER
+              Value: !Ref AuthLdapServer
+            - Name: AUTH_LDAP_USERNAME_FORMAT
+              Value: !Ref AuthLdapUsernameFormat
+            - Name: AUTH_LDAP_SEARCH
+              Value: !Ref AuthLdapSearch
+          Command:
+            - "/app/docker/docker-bootstrap.sh"
+            - "beat"
+          # Send logs to CloudWatch Logs
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+
+      Volumes:
+        - Name: supersetHomeVolume
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref SupersetFileSystem
+            TransitEncryption: ENABLED
+        - Name: redisVolume
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref RedisFileSystem
+            TransitEncryption: ENABLED
+        - Name: postgresVolume
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref PostgresFileSystem
+            TransitEncryption: ENABLED
+  
+  # A role needed by ECS
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref ServiceName, ExecutionRole]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+  # A role for the containers
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref ServiceName, TaskRole]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      # ManagedPolicyArns:
+      #   -
+      # Policies:
+      #   -
+  ContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref ServiceName, -ContainerSecurityGroup]]
+      VpcId: !ImportValue VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          CidrIp: 0.0.0.0/0
+  Service:
+    Type: AWS::ECS::Service
+    # This dependency is needed so that the load balancer is setup correctly in time
+    DependsOn:
+      - ListenerHTTPS
+      - ListenerHTTPSPublic
+    Properties:
+      # CloudFormation cannot update a stack when a custom-named resource requires replacing
+      ServiceName: !Ref ServiceName
+      Cluster: !Ref Cluster
+      # To use EFS, set PlatformVersion to 1.4.0 otherwise LATEST
+      PlatformVersion: 1.4.0
+      TaskDefinition: !Ref TaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      DeploymentController:
+        Type: ECS
+      DesiredCount: 1
+      # This may need to be adjusted if the container takes a while to start up
+      HealthCheckGracePeriodSeconds: 300
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # change to DISABLED if you're using private subnets that have access to a NAT gateway
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !ImportValue PrivateSubnetA
+            - !ImportValue PrivateSubnetB
+            - !ImportValue PrivateSubnetC
+          SecurityGroups:
+            - !ImportValue SecurityGroupVPC # - vpc
+      LoadBalancers:
+        - ContainerName: superset_app
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref TargetGroup1
+        - ContainerName: superset_app_public
+          ContainerPort: 18088
+          TargetGroupArn: !Ref TargetGroupPublic1
+
+  TargetGroup1:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      # will look for a 200 status code by default unless specified otherwise
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 2
+      HealthyThresholdCount: 2
+      Name: !Join ['', [!Ref ServiceName, -tg-1]]
+      Port: !Ref ContainerPort
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: true
+        - Key: deregistration_delay.timeout_seconds
+          Value: 10 # default is 300
+      TargetType: ip
+      VpcId: !ImportValue VpcId
+  TargetGroup2:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      # will look for a 200 status code by default unless specified otherwise
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 2
+      HealthyThresholdCount: 2
+      Name: !Join ['', [!Ref ServiceName, -tg-2]]
+      Port: !Ref ContainerPort
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: true
+        - Key: deregistration_delay.timeout_seconds
+          Value: 10 # default is 300
+      TargetType: ip
+      VpcId: !ImportValue VpcId
+  TargetGroupPublic1:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      # will look for a 200 status code by default unless specified otherwise
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 2
+      HealthyThresholdCount: 2
+      Name: !Join ['', [!Ref ServiceName, -public-tg-1]]
+      Port: 18088
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: true
+        - Key: deregistration_delay.timeout_seconds
+          Value: 10 # default is 300
+      TargetType: ip
+      VpcId: !ImportValue VpcId
+  TargetGroupPublic2:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      # will look for a 200 status code by default unless specified otherwise
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 2
+      HealthyThresholdCount: 2
+      Name: !Join ['', [!Ref ServiceName, -public-tg-2]]
+      Port: 18088
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: true
+        - Key: deregistration_delay.timeout_seconds
+          Value: 10 # default is 300
+      TargetType: ip
+      VpcId: !ImportValue VpcId
+  ListenerHTTPS:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref TargetGroup1
+          Type: forward
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: !Ref LoadBalancerPort
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !ImportValue CertificateArn
+  ListenerHTTPSPublic:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref TargetGroupPublic1
+          Type: forward
+      LoadBalancerArn: !Ref LoadBalancerPublic
+      Port: !Ref LoadBalancerPort
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !ImportValue CertificateArn
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      LoadBalancerAttributes:
+        # this is the default, but is specified here in case it needs to be changed
+        - Key: idle_timeout.timeout_seconds
+          Value: 60
+      Name: !Join ['', [!Ref ServiceName, -lb]]
+      # "internal" is also an option
+      Scheme: internet-facing
+      SecurityGroups:
+        # - !Ref LoadbalancerSecurityGroup
+        - !ImportValue SecurityGroupVPC
+        - !ImportValue SecurityGroupDevelopment
+      Subnets:
+        - !ImportValue PublicSubnetA
+        - !ImportValue PublicSubnetB
+        - !ImportValue PublicSubnetC
+  LoadBalancerPublic:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      LoadBalancerAttributes:
+        # this is the default, but is specified here in case it needs to be changed
+        - Key: idle_timeout.timeout_seconds
+          Value: 60
+      Name: !Join ['', [!Ref ServiceName, -public-lb]]
+      # "internal" is also an option
+      Scheme: internet-facing
+      SecurityGroups:
+        - !ImportValue SecurityGroupVPC
+        - !ImportValue SecurityGroupDevelopment
+      Subnets:
+        - !ImportValue PublicSubnetA
+        - !ImportValue PublicSubnetB
+        - !ImportValue PublicSubnetC
+  DNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Join ['', [!ImportValue HostedZoneName, .]]
+      Name: !Join ['', [!Ref Subdomain, ., !ImportValue HostedZoneName, .]]
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+  DNSRecordPublic:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Join ['', [!ImportValue HostedZoneName, .]]
+      Name: !Join ['', [!Ref Subdomain, -public, ., !ImportValue HostedZoneName, .]]
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancerPublic.DNSName
+        HostedZoneId: !GetAtt LoadBalancerPublic.CanonicalHostedZoneID
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', [/aws/ecs/, !Ref ServiceName]]
+Outputs:
+  Endpoint:
+    Description: Endpoint
+    Value: !Join ['', ['https://', !Ref DNSRecord]]
+  PublicEndpoint:
+    Description: Public Endpoint
+    Value: !Join ['', ['https://', !Ref DNSRecordPublic]]
