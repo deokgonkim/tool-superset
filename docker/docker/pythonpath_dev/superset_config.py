@@ -113,7 +113,7 @@ else:
 
     AUTH_TYPE = AUTH_LDAP
     AUTH_LDAP_SERVER = get_env_variable('AUTH_LDAP_SERVER', None)
-    # AUTH_LDAP_USE_TLS = True
+    AUTH_LDAP_USE_TLS = True
 
     # registration configs
     AUTH_USER_REGISTRATION = True  # allow users who are not already in the FAB DB
